@@ -1,1 +1,1 @@
-# Manage secrets using gpg or secret-tool
+# Haskell library to manage secrets using the `gpg` and `secret-tool` utilities.
