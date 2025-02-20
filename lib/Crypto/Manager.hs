@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Crypto.SecretTools
+module Crypto.Manager
   ( decryptFile,
     encryptFile,
     lookupSecret,
