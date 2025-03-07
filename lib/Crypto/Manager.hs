@@ -10,9 +10,11 @@ module Crypto.Manager
   )
 where
 
+import Data.String qualified as S
 import System.Directory qualified as D
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO qualified as IO
+import System.Info qualified as SI
 import System.Process qualified as P
 import Text.Printf (printf)
 
@@ -70,22 +72,41 @@ type Label = String
 
 lookupSecret :: Attribute -> Value -> IO (Either SecretToolsError String)
 lookupSecret attribute value = do
-  (x, o, e) <- P.readProcessWithExitCode "secret-tool" ["lookup", attribute, value] ""
+  (x, o, e) <- case SI.os of
+    "linux" -> P.readProcessWithExitCode "secret-tool" ["lookup", attribute, value] ""
+    "darwin" -> P.readProcessWithExitCode "security" ["find-generic-password", "-s", attribute, "-a", value, "-w"] ""
+    _ -> error $ "lookupSecret cannot work in operating system: " <> SI.os
   if x == ExitSuccess
-    then return $ Right o
+    then pure $ Right o
     else pure $ Left $ LookupError e
 
 storeSecret :: Label -> Attribute -> Value -> Secret -> IO (Either SecretToolsError String)
 storeSecret label attribute value secret = do
-  (Just h, _, _, p) <-
-    P.createProcess
-      (P.proc "secret-tool" ["store", "--label", label, attribute, value])
-        { P.std_in = P.CreatePipe
-        }
-  IO.hPutStr h secret
-  IO.hFlush h
-  IO.hClose h
-  x <- P.waitForProcess p
-  if x == ExitSuccess
-    then return $ Right "secret stored."
-    else pure $ Left $ StoreError "Storing secret failed."
+  let cmd = ["add-generic-password", "-l", label, "-a", value, "-s", attribute, "-T /usr/bin/security", "-U", "-w", secret]
+  (Just h, _, _, p) <- case SI.os of
+    "linux" ->
+      P.createProcess
+        (P.proc "secret-tool" ["store", "--label", label, attribute, value])
+          { P.std_in = P.CreatePipe
+          }
+    "darwin" ->
+      P.createProcess
+        (P.proc "security" ["-i"])
+          { P.std_in = P.CreatePipe
+          }
+  case SI.os of
+    "linux" -> do
+      IO.hPutStr h secret
+      finish h p
+    "darwin" -> do
+      IO.hPutStr h (S.unwords cmd)
+      finish h p
+    _ -> pure $ Left $ StoreError $ printf "Can't work in %s operating system." SI.os
+  where
+    finish h p = do
+      IO.hFlush h
+      IO.hClose h
+      x <- P.waitForProcess p
+      if x == ExitSuccess
+        then pure $ Right "secret stored."
+        else pure $ Left $ StoreError "Storing secret failed."
