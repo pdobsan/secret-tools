@@ -72,41 +72,63 @@ type Label = String
 
 lookupSecret :: Attribute -> Value -> IO (Either SecretToolsError String)
 lookupSecret attribute value = do
-  (x, o, e) <- case SI.os of
-    "linux" -> P.readProcessWithExitCode "secret-tool" ["lookup", attribute, value] ""
-    "darwin" -> P.readProcessWithExitCode "security" ["find-generic-password", "-s", attribute, "-a", value, "-w"] ""
-    _ -> pure $ Left $ LookupError $ printf "Can't work in %s operating system." SI.os
-  if x == ExitSuccess
-    then pure $ Right o
-    else pure $ Left $ LookupError e
+  case SI.os of
+    "linux" ->
+      P.readProcessWithExitCode
+        "secret-tool"
+        ["lookup", attribute, value]
+        ""
+        >>= result
+    "darwin" ->
+      P.readProcessWithExitCode
+        "security"
+        ["find-generic-password", "-s", attribute, "-a", value, "-w"]
+        ""
+        >>= result
+    os -> pure $ Left $ LookupError $ printf "Can't work in %s operating system." os
+  where
+    result (x, o, e) =
+      if x == ExitSuccess
+        then pure $ Right o
+        else pure $ Left $ LookupError e
 
 storeSecret :: Label -> Attribute -> Value -> Secret -> IO (Either SecretToolsError String)
 storeSecret label attribute value secret = do
-  let cmd = ["add-generic-password", "-l", label, "-a", value, "-s", attribute, "-T /usr/bin/security", "-U", "-w", secret]
-  (Just h, _, _, p) <- case SI.os of
-    "linux" ->
+  let cmd =
+        [ "add-generic-password",
+          "-l",
+          label,
+          "-a",
+          value,
+          "-s",
+          attribute,
+          "-T /usr/bin/security",
+          "-U",
+          "-w",
+          secret
+        ]
+  case SI.os of
+    "linux" -> do
       P.createProcess
         (P.proc "secret-tool" ["store", "--label", label, attribute, value])
           { P.std_in = P.CreatePipe
           }
-    "darwin" ->
+        >>= \(h, _, _, p) -> write2Pipe h p secret
+    "darwin" -> do
       P.createProcess
         (P.proc "security" ["-i"])
           { P.std_in = P.CreatePipe
           }
-  case SI.os of
-    "linux" -> do
-      IO.hPutStr h secret
-      finish h p
-    "darwin" -> do
-      IO.hPutStr h (S.unwords cmd)
-      finish h p
-    _ -> pure $ Left $ StoreError $ printf "Can't work in %s operating system." SI.os
+        >>= \(h, _, _, p) -> write2Pipe h p (S.unwords cmd)
+    os -> pure $ Left $ StoreError $ printf "Can't work in %s operating system." os
   where
-    finish h p = do
+    write2Pipe (Just h) p s = do
+      IO.hPutStr h s
       IO.hFlush h
       IO.hClose h
       x <- P.waitForProcess p
       if x == ExitSuccess
         then pure $ Right "secret stored."
         else pure $ Left $ StoreError "Storing secret failed."
+    write2Pipe Nothing _ _ = do
+      pure $ Left $ StoreError $ printf "Failed to get handle to pipe."
