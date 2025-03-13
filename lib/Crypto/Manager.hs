@@ -75,7 +75,7 @@ lookupSecret attribute value = do
   (x, o, e) <- case SI.os of
     "linux" -> P.readProcessWithExitCode "secret-tool" ["lookup", attribute, value] ""
     "darwin" -> P.readProcessWithExitCode "security" ["find-generic-password", "-s", attribute, "-a", value, "-w"] ""
-    _ -> error $ "lookupSecret cannot work in operating system: " <> SI.os
+    _ -> pure $ Left $ LookupError $ printf "Can't work in %s operating system." SI.os
   if x == ExitSuccess
     then pure $ Right o
     else pure $ Left $ LookupError e
